@@ -1,0 +1,212 @@
+
+🎯 项目规划：SSML 语音合成平台
+
+1. 核心功能
+
+• ✅ 网页界面输入 SSML
+• ✅ 配置 Azure API 密钥和区域
+• ✅ 实时语音合成
+• ✅ 在线播放 + 下载
+• ✅ REST API 接口
+
+2. 技术架构
+
+前端 (HTML/CSS/JS)
+  ↓ HTTP
+后端 (Python FastAPI)
+  ↓ REST API
+Azure TTS 服务
+  ↓ 返回音频
+前端播放/下载3. 详细规划
+
+A. 前端界面 (index.html)
+
+1. SSML 编辑器 (带语法高亮) 可以参考 https://github.com/mekumiao/ssml-editor
+2. API 配置表单 (密钥、区域、语音)
+3. 控制面板 (合成、播放、下载)
+4. 预览面板 (语音列表、效果预览)
+5. 历史记录 (保存的 SSML 模板)B. 后端 API (FastAPI)
+
+# 主要端点
+POST /api/synthesize    # 语音合成
+GET  /api/voices        # 获取可用语音列表
+POST /api/validate      # SSML 语法验证
+GET  /api/history       # 获取历史记录
+POST /api/save-template # 保存模板C. 数据库 (可选)
+
+-- 用户配置
+users (id, api_key_encrypted, region, default_voice)
+
+-- SSML 模板
+templates (id, user_id, name, ssml_content, created_at)
+
+-- 合成历史
+history (id, user_id, ssml_hash, audio_url, created_at)4. 文件结构
+
+ssml-tts-webapp/
+├── frontend/
+│   ├── index.html          # 主界面
+│   ├── style.css           # 样式
+│   ├── app.js              # 前端逻辑
+│   └── lib/
+│       ├── codemirror/     # 代码编辑器
+│       └── audio-player/   # 音频播放器
+├── backend/
+│   ├── main.py             # FastAPI 主程序
+│   ├── azure_tts.py        # Azure TTS 封装
+│   ├── models.py           # 数据模型
+│   ├── database.py         # 数据库连接
+│   └── requirements.txt    # Python 依赖
+├── docker-compose.yml      # Docker 部署
+└── README.md               # 项目说明5. API 接口设计
+
+端点1：语音合成
+
+POST /api/synthesize
+Content-Type: application/json
+
+{
+  "ssml": "<speak>...</speak>",
+  "api_key": "your_key",
+  "region": "eastus",
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "output_format": "audio-16khz-32kbitrate-mono-mp3"
+}
+
+响应：
+{
+  "success": true,
+  "audio_url": "/api/audio/abc123.mp3",
+  "duration_ms": 1500,
+  "file_size": 24576
+}端点2：获取语音列表
+
+GET /api/voices?region=eastus&locale=zh-CN
+
+响应：
+{
+  "voices": [
+    {
+      "name": "zh-CN-XiaoxiaoNeural",
+      "locale": "zh-CN",
+      "gender": "Female",
+      "style_list": ["general", "assistant", "chat"]
+    }
+  ]
+}端点3：SSML 验证
+
+POST /api/validate
+Content-Type: application/json
+
+{
+  "ssml": "<speak>测试</speak>"
+}
+
+响应：
+{
+  "valid": true,
+  "errors": [],
+  "warnings": ["建议添加语言属性"]
+}6. 前端功能细节
+
+SSML 编辑器功能
+
+1. 语法高亮 - XML/SSML 语法着色
+2. 代码补全 - 自动补全标签和属性
+3. 模板库 - 常用 SSML 模板
+4. 实时预览 - 输入时显示效果预览
+5. 错误检查 - 实时语法检查
+
+语音选择器
+
+// 动态加载语音列表
+async function loadVoices() {
+  const response = await fetch('/api/voices');
+  const voices = await response.json();
+  
+  // 按语言分组显示
+  // 中文、英文、日文等
+  // 显示语音性别和风格
+}音频播放器
+
+// 支持的功能
+1. 播放/暂停/停止
+2. 进度条控制
+3. 音量调节
+4. 播放速度控制 (0.5x - 2x)
+5. 波形可视化
+6. 下载按钮 (MP3/WAV)7. 安全考虑
+
+API 密钥安全
+
+# 后端处理，不暴露在前端
+@app.post("/api/synthesize")
+async def synthesize(request: SynthesizeRequest):
+    # 直接使用用户提供的密钥调用 Azure
+    # 不在后端存储密钥
+    audio = call_azure_tts(
+        ssml=request.ssml,
+        api_key=request.api_key,  # 临时使用
+        region=request.region
+    )
+    return audio输入验证
+
+# SSML 验证
+def validate_ssml(ssml: str):
+    # 1. XML 语法检查
+    # 2. 标签白名单验证
+    # 3. 属性值范围检查
+    # 4. 防止注入攻击
+    pass8. 部署选项
+
+选项A：本地运行
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动后端
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 前端直接打开 index.html选项B：Docker 部署
+
+FROM python:3.11
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]选项C：云部署
+
+• Vercel - 前端部署
+• Railway/Render - 后端部署
+• Supabase - 数据库 + 存储
+
+9. 扩展功能（可选）
+
+用户系统
+
+• 注册/登录
+• API 密钥加密存储
+• 使用量统计
+• 订阅计划
+
+高级功能
+
+• 批量合成 - 多个 SSML 批量处理
+• 语音
+
+技术偏好
+
+1. 前端框架： Vue 
+3. 数据库 暂时不需要
+4. 部署方式：本地/Docker
+
+功能优先级
+
+1. 核心功能：SSML 输入 + 合成 + 播放
+3. 模板功能：预置 SSML 模板？
+
+设计风格
+
+1. 界面风格：现代化
+2. 响应式：需要移动端适配
+3. 主题：亮色/暗色模式
+

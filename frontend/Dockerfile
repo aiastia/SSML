@@ -1,0 +1,32 @@
+# 前端 Dockerfile - 构建阶段
+FROM node:18-alpine as build
+
+WORKDIR /app
+
+# 复制 package.json
+COPY package.json* ./
+
+# 安装依赖
+RUN npm install
+
+# 复制源代码
+COPY . .
+
+# 设置生产环境变量
+ENV NODE_ENV=production
+
+# 构建生产版本
+RUN npm run build
+
+# 生产阶段 - 使用 nginx
+FROM nginx:alpine
+
+# 复制构建产物
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# 复制 nginx 配置
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
