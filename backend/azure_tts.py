@@ -7,8 +7,10 @@ from pydub import AudioSegment
 from models import VoiceInfo
 
 
-# Azure TTS 单次请求建议的文本字符数上限（保守值，避免 400 错误）
-MAX_TEXT_CHARS_PER_REQUEST = 3000
+# Azure TTS 单次请求的文本字符数上限。
+# Azure 官方文档限制是按音频时长（约 10 分钟），实际字符上限很高（万级）。
+# 拆分会引入额外复杂度和潜在错误，因此只在文本非常大时才拆分。
+MAX_TEXT_CHARS_PER_REQUEST = 10000
 
 
 class AzureTTSClient:
