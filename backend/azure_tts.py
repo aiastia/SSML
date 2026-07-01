@@ -25,6 +25,10 @@ class AzureTTSClient:
             "X-Microsoft-OutputFormat": output_format
         }
 
+        # 诊断日志：发送的 SSML 长度和前 200 字符
+        print(f"[TTS DEBUG] 发送 SSML 长度: {len(ssml)} 字符, 纯文本: {len(re.sub(r'<[^>]+>', '', ssml))} 字符")
+        print(f"[TTS DEBUG] SSML 前 200 字符: {ssml[:200]}")
+
         try:
             # 合成长文本音频可能需要较长时间,30 秒不够。
             # 连接超时 10 秒,读取超时 300 秒(5 分钟,足够合成一大段)。
@@ -36,10 +40,15 @@ class AzureTTSClient:
             )
             if response.status_code == 200:
                 audio_data = response.content
+                print(f"[TTS DEBUG] 合成成功, 音频大小: {len(audio_data)} bytes")
                 return audio_data, len(audio_data), None
             else:
-                # 尝试解析 Azure 返回的错误信息
+                # 诊断日志：Azure 返回的完整信息
+                print(f"[TTS DEBUG] Azure 返回 HTTP {response.status_code}")
+                print(f"[TTS DEBUG] Azure response headers: {dict(response.headers)}")
+                print(f"[TTS DEBUG] Azure response body: {response.text[:1000]}")
                 error_msg = self._parse_azure_error(response)
+                print(f"[TTS DEBUG] 解析后的错误: {error_msg}")
                 return None, 0, f"API Error: {response.status_code} - {error_msg}"
         except requests.exceptions.Timeout:
             return None, 0, "Request timeout"
@@ -51,6 +60,7 @@ class AzureTTSClient:
         result = self._synthesize_single(ssml, output_format)
         # 失败且 SSML 包含 express-as → 尝试去掉 style 重试
         if result[2] and 'mstts:express-as' in ssml and '400' in result[2]:
+            print(f"[TTS DEBUG] express-as style 导致 400，尝试去掉 style 重试...")
             return self._retry_without_express_as_style(ssml, output_format, result[2])
         return result
 
@@ -198,6 +208,8 @@ class AzureTTSClient:
             text_length = self._get_text_length(ssml)
         except Exception:
             text_length = len(ssml)
+
+        print(f"[TTS DEBUG] 纯文本长度: {text_length}, 阈值: {MAX_TEXT_CHARS_PER_REQUEST}, 需要分段: {text_length > MAX_TEXT_CHARS_PER_REQUEST}")
 
         # 文本未超过阈值，直接单次请求
         if text_length <= MAX_TEXT_CHARS_PER_REQUEST:
