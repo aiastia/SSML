@@ -157,16 +157,31 @@ class AzureTTSClient:
 
     def _retry_without_express_as_style(self, ssml: str, output_format: str, original_error: str) -> Tuple[bytes, int, Optional[str]]:
         """
-        去掉 <mstts:express-as> 的 style 属性后重试。
+        逐步降级重试：
+        1. 先把 style 换成 "general"（最通用的 style）
+        2. 如果还失败，直接移除整个 <mstts:express-as> 标签
         Azure 可能因为 voice 不支持该 style 而返回 400。
         """
-        # 去掉 express-as 的 style="xxx" 属性
-        retry_ssml = re.sub(r'style\s*=\s*"[^"]*"', '', ssml)
-        # 清理多余空格
-        retry_ssml = re.sub(r'<mstts:express-as(\s+)>', r'<mstts:express-as>', retry_ssml)
-        retry_ssml = re.sub(r'<mstts:express-as(\s+)(/?>)', r'<mstts:express-as\2', retry_ssml)
+        # 第 1 次重试：style → general
+        retry1 = re.sub(
+            r'(<mstts:express-as\b[^>]*?)style\s*=\s*"[^"]*"',
+            r'\1style="general"',
+            ssml
+        )
+        print(f"[TTS DEBUG] 重试 1: style → general")
+        result = self._synthesize_single(retry1, output_format)
+        if not result[2]:
+            return result
 
-        return self._synthesize_single(retry_ssml, output_format)
+        # 第 2 次重试：彻底移除 <mstts:express-as> 标签（保留内容）
+        retry2 = re.sub(r'</?mstts:express-as\b[^>]*>', '', ssml)
+        print(f"[TTS DEBUG] 重试 2: 移除整个 mstts:express-as 标签")
+        result2 = self._synthesize_single(retry2, output_format)
+        if not result2[2]:
+            return result2
+
+        # 都失败了，返回原始错误
+        return None, 0, original_error
 
     def _normalize_namespaces(self, ssml: str) -> str:
         """
