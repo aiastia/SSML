@@ -26,11 +26,13 @@ class AzureTTSClient:
         }
 
         try:
+            # 合成长文本音频可能需要较长时间,30 秒不够。
+            # 连接超时 10 秒,读取超时 300 秒(5 分钟,足够合成一大段)。
             response = requests.post(
                 self.base_url,
                 headers=headers,
                 data=ssml.encode('utf-8'),
-                timeout=30
+                timeout=(10, 300)
             )
             if response.status_code == 200:
                 audio_data = response.content
