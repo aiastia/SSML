@@ -7,6 +7,11 @@ from pydub import AudioSegment
 from models import VoiceInfo
 
 
+# 注册 SSML 命名空间，防止 ElementTree 在序列化时把 mstts: 改成 ns0: 等自动前缀。
+# Azure 只认 mstts: 前缀和默认命名空间，注册一次全局生效。
+ET.register_namespace('mstts', 'https://www.w3.org/2001/mstts')
+ET.register_namespace('', 'http://www.w3.org/2001/10/synthesis')
+
 # Azure TTS 单次请求建议的文本字符数上限（保守值，避免 400 错误）
 MAX_TEXT_CHARS_PER_REQUEST = 3000
 
@@ -16,13 +21,6 @@ class AzureTTSClient:
         self.api_key = api_key
         self.region = region
         self.base_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
-    
-    def _get_headers(self) -> dict:
-        return {
-            "Ocp-Apim-Subscription-Key": self.api_key,
-            "Content-Type": "application/ssml+xml",
-            "X-Microsoft-OutputFormat": "audio-16khz-32kbitrate-mono-mp3"
-        }
     
     def _synthesize_single(self, ssml: str, output_format: str) -> Tuple[bytes, int, Optional[str]]:
         """发送单次 SSML 合成请求"""
@@ -69,7 +67,10 @@ class AzureTTSClient:
         try:
             text = response.text.strip()
             if not text:
-                return response.reason or "Unknown error"
+                # Azure 对部分非法 SSML（如非法属性值）只返回空 body 的 400，不给任何错误码。
+                # 这里补一条提示，避免前端只能看到笼统的 "Bad Request"。
+                hint = "Azure 未返回详细错误。常见原因：prosody 属性值非法(如 dB 后缀)、voice 不支持该 style、或 SSML 结构不被接受。"
+                return f"{response.reason or 'Unknown error'} ({hint})"
             # Azure 通常返回 XML 格式错误，如 <Error><Code>...</Code><Message>...</Message></Error>
             root = ET.fromstring(text)
             code = root.findtext('.//Code', default='')
@@ -80,26 +81,66 @@ class AzureTTSClient:
         except Exception:
             return response.text[:500] or response.reason or "Unknown error"
 
+    def _validate_prosody_attributes(self, ssml: str) -> Optional[str]:
+        """
+        预校验 <prosody> 的 volume / rate / pitch 属性值。
+        Azure 对非法属性值会返回空 body 的 400（没有任何 InvalidSsml 提示），
+        这里提前拦截并返回中文友好提示。
+
+        合法值规则（Azure）：
+        - volume: 0-100 纯数字 | 相对百分比如 +30%/-20% | 预设词 silent/x-soft/soft/medium/loud/x-loud/default
+        - rate:   相对百分比如 +10%/-5% | 预设词 x-slow/slow/medium/fast/x-fast/default
+        - pitch:  相对赫兹如 +5Hz/-10Hz | 预设词 x-low/low/medium/high/x-high/default
+
+        Returns:
+            错误提示字符串；None 表示全部合法。
+        """
+        presets = {
+            'volume': {'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud', 'default'},
+            'rate': {'x-slow', 'slow', 'medium', 'fast', 'x-fast', 'default'},
+            'pitch': {'x-low', 'low', 'medium', 'high', 'x-high', 'default'},
+        }
+        hints = {
+            'volume': "volume 不支持 dB 后缀，请用 0-100 / 相对百分比(如 +30%) / 预设词",
+            'rate': "rate 请用相对百分比(如 +10%)或预设词(x-slow/slow/medium/fast/x-fast)",
+            'pitch': "pitch 请用相对赫兹(如 +5Hz)或预设词(x-low/low/medium/high/x-high)",
+        }
+
+        def _is_valid(attr: str, value: str) -> bool:
+            value = value.strip()
+            if value in presets[attr]:
+                return True
+            if attr == 'volume' and re.fullmatch(r'\d{1,3}', value) and 0 <= int(value) <= 100:
+                return True
+            if attr in ('volume', 'rate') and re.fullmatch(r'[+-]\d+%$', value):
+                return True
+            if attr == 'pitch' and re.fullmatch(r'[+-]\d+Hz$', value):
+                return True
+            return False
+
+        for match in re.finditer(r'<prosody\b[^>]*>', ssml, re.IGNORECASE):
+            tag = match.group(0)
+            for attr in ('volume', 'rate', 'pitch'):
+                am = re.search(rf'{attr}\s*=\s*"([^"]*)"', tag, re.IGNORECASE)
+                if am and not _is_valid(attr, am.group(1)):
+                    return f"prosody {attr} 属性值非法: '{am.group(1)}'。{hints[attr]}"
+        return None
+
     def _normalize_namespaces(self, ssml: str) -> str:
         """
-        规范化 SSML 命名空间声明：
-        - 确保 xmlns:mstts 在 <speak> 根元素上（而非子元素）
-        - 确保发送给 Azure 的 SSML 使用 mstts: 前缀
+        仅在需要时补充 xmlns:mstts 声明：
+        - 未使用 mstts: 前缀 → 不动
+        - 已声明 xmlns:mstts（无论写在哪个元素上）→ 尊重用户写法，不动
+        - 使用了 mstts: 但全文无 xmlns:mstts → 在 <speak> 上补一个
         """
-        # 用正则处理，避免 ElementTree 重写时产生重复属性
-        # 1. 移除所有元素上的 xmlns:mstts 声明
-        ssml = re.sub(r'\s+xmlns:mstts\s*=\s*"https://www\.w3\.org/2001/mstts"', '', ssml)
-
-        # 2. 在 <speak ...> 标签内添加 xmlns:mstts（如果还没有）
-        if 'xmlns:mstts' not in ssml[:ssml.index('>')]:
-            ssml = re.sub(
-                r'(<speak[^>]*)(>)',
-                r'\1 xmlns:mstts="https://www.w3.org/2001/mstts"\2',
-                ssml,
-                count=1
-            )
-
-        return ssml
+        if 'mstts:' not in ssml:
+            return ssml
+        if 'xmlns:mstts' in ssml:
+            return ssml
+        speak_end = ssml.find('>')
+        if speak_end == -1:
+            return ssml
+        return ssml[:speak_end] + ' xmlns:mstts="https://www.w3.org/2001/mstts"' + ssml[speak_end:]
 
     def synthesize(self, ssml: str, output_format: str = "audio-16khz-32kbitrate-mono-mp3") -> Tuple[bytes, int, Optional[str]]:
         """
@@ -109,6 +150,12 @@ class AzureTTSClient:
         Returns:
             Tuple of (audio_data, file_size, error_message)
         """
+        # 发送前预校验 prosody 属性值，提前拦截 dB 等非法后缀，
+        # 避免被 Azure 以空 body 的 400 拒绝（那种错误没有任何提示，极难定位）
+        validate_error = self._validate_prosody_attributes(ssml)
+        if validate_error:
+            return None, 0, validate_error
+
         # 规范化命名空间声明，确保 xmlns:mstts 在 <speak> 根元素上
         ssml = self._normalize_namespaces(ssml)
 
