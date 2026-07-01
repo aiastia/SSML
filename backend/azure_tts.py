@@ -1,7 +1,6 @@
 import requests
 import io
 import re
-import copy
 import xml.etree.ElementTree as ET
 from typing import Optional, Tuple, List
 from pydub import AudioSegment
@@ -17,10 +16,6 @@ class AzureTTSClient:
         self.api_key = api_key
         self.region = region
         self.base_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
-        # 注册常见命名空间，保证 ET.tostring 输出正确的前缀
-        ET.register_namespace('', 'http://www.w3.org/2001/10/synthesis')
-        ET.register_namespace('mstts', 'https://www.w3.org/2001/mstts')
-        ET.register_namespace('xml', 'http://www.w3.org/XML/1998/namespace')
     
     def _get_headers(self) -> dict:
         return {
@@ -71,6 +66,27 @@ class AzureTTSClient:
         except Exception:
             return response.text[:500] or response.reason or "Unknown error"
 
+    def _normalize_namespaces(self, ssml: str) -> str:
+        """
+        规范化 SSML 命名空间声明：
+        - 确保 xmlns:mstts 在 <speak> 根元素上（而非子元素）
+        - 确保发送给 Azure 的 SSML 使用 mstts: 前缀
+        """
+        # 用正则处理，避免 ElementTree 重写时产生重复属性
+        # 1. 移除所有元素上的 xmlns:mstts 声明
+        ssml = re.sub(r'\s+xmlns:mstts\s*=\s*"https://www\.w3\.org/2001/mstts"', '', ssml)
+
+        # 2. 在 <speak ...> 标签内添加 xmlns:mstts（如果还没有）
+        if 'xmlns:mstts' not in ssml[:ssml.index('>')]:
+            ssml = re.sub(
+                r'(<speak[^>]*)(>)',
+                r'\1 xmlns:mstts="https://www.w3.org/2001/mstts"\2',
+                ssml,
+                count=1
+            )
+
+        return ssml
+
     def synthesize(self, ssml: str, output_format: str = "audio-16khz-32kbitrate-mono-mp3") -> Tuple[bytes, int, Optional[str]]:
         """
         Synthesize speech from SSML.
@@ -79,6 +95,9 @@ class AzureTTSClient:
         Returns:
             Tuple of (audio_data, file_size, error_message)
         """
+        # 规范化命名空间声明，确保 xmlns:mstts 在 <speak> 根元素上
+        ssml = self._normalize_namespaces(ssml)
+
         # 提取纯文本长度
         try:
             text_length = self._get_text_length(ssml)
@@ -192,6 +211,8 @@ class AzureTTSClient:
         result = []
         for chunk_xml in chunks_xml:
             parts = [f'<speak {speak_attrib_str}>']
+            if not speak_attrs.get('xmlns:mstts'):
+                parts[0] = f'<speak {speak_attrib_str} xmlns:mstts="https://www.w3.org/2001/mstts">'
             parts.append(f'<voice {voice_attrib_str}>')
             if express_as_elem is not None:
                 parts.append(f'<mstts:express-as {express_as_attrib_str}>')
