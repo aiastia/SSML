@@ -7,11 +7,6 @@ from pydub import AudioSegment
 from models import VoiceInfo
 
 
-# 注册 SSML 命名空间，防止 ElementTree 在序列化时把 mstts: 改成 ns0: 等自动前缀。
-# Azure 只认 mstts: 前缀和默认命名空间，注册一次全局生效。
-ET.register_namespace('mstts', 'https://www.w3.org/2001/mstts')
-ET.register_namespace('', 'http://www.w3.org/2001/10/synthesis')
-
 # Azure TTS 单次请求建议的文本字符数上限（保守值，避免 400 错误）
 MAX_TEXT_CHARS_PER_REQUEST = 3000
 
@@ -29,13 +24,6 @@ class AzureTTSClient:
             "Content-Type": "application/ssml+xml",
             "X-Microsoft-OutputFormat": output_format
         }
-        # 打印即将发送的 SSML（repr 形式，便于发现隐藏字符/多余空格）
-        print("=" * 100)
-        print(f"[Azure TTS] 请求 URL: {self.base_url}")
-        print(f"[Azure TTS] OutputFormat: {output_format}")
-        print("[Azure TTS] 即将发送的 SSML (repr):")
-        print(repr(ssml))
-        print("=" * 100)
 
         try:
             response = requests.post(
@@ -48,12 +36,6 @@ class AzureTTSClient:
                 audio_data = response.content
                 return audio_data, len(audio_data), None
             else:
-                # 打印 Azure 的原始返回，便于定位 InvalidSsml 等具体原因
-                print("=" * 100)
-                print(f"[Azure TTS] HTTP {response.status_code} {response.reason}")
-                print("[Azure TTS] Azure 原始返回 (response.text):")
-                print(response.text)
-                print("=" * 100)
                 # 尝试解析 Azure 返回的错误信息
                 error_msg = self._parse_azure_error(response)
                 return None, 0, f"API Error: {response.status_code} - {error_msg}"
@@ -61,6 +43,14 @@ class AzureTTSClient:
             return None, 0, "Request timeout"
         except requests.exceptions.RequestException as e:
             return None, 0, f"Request failed: {str(e)}"
+
+    def _synthesize_with_retry(self, ssml: str, output_format: str) -> Tuple[bytes, int, Optional[str]]:
+        """发送请求，如果因 express-as style 不被支持而 400，去掉 style 后重试"""
+        result = self._synthesize_single(ssml, output_format)
+        # 失败且 SSML 包含 express-as → 尝试去掉 style 重试
+        if result[2] and 'mstts:express-as' in ssml and '400' in result[2]:
+            return self._retry_without_express_as_style(ssml, output_format, result[2])
+        return result
 
     def _parse_azure_error(self, response) -> str:
         """解析 Azure 返回的错误 XML，提取可读信息"""
@@ -126,17 +116,56 @@ class AzureTTSClient:
                     return f"prosody {attr} 属性值非法: '{am.group(1)}'。{hints[attr]}"
         return None
 
+    # Azure 已知的 express-as style 值（仅供参考，不阻塞请求）
+    KNOWN_EXPRESS_AS_STYLES = {
+        'general', 'narration', 'narration-relaxed', 'cheerful', 'sad', 'angry',
+        'calm', 'fearful', 'serious', 'excited', 'customerservice', 'chat',
+        'assistant', 'newscast', 'empathetic', 'depressed', 'disgruntled',
+        'embarrassed', 'envious', 'grumbling', 'hopeful', 'lyrical', 'poetry',
+        'sports_commentary', 'sports_commentary_excited', 'gentle', 'terrified',
+        'unfriendly', 'shouting', 'frustrated', 'conversational', 'poetry-reading',
+    }
+
+    def _validate_express_as_styles(self, ssml: str) -> Optional[str]:
+        """校验 <mstts:express-as> 的 style 属性，返回警告信息（不阻塞）"""
+        warnings = []
+        for match in re.finditer(r'<mstts:express-as\b[^>]*>', ssml, re.IGNORECASE):
+            tag = match.group(0)
+            am = re.search(r'style\s*=\s*"([^"]*)"', tag, re.IGNORECASE)
+            if am:
+                style = am.group(1).strip().lower()
+                if style not in self.KNOWN_EXPRESS_AS_STYLES:
+                    warnings.append(
+                        f"express-as style '{am.group(1)}' 可能不被当前 voice 支持"
+                        f"（已知合法值：{', '.join(sorted(self.KNOWN_EXPRESS_AS_STYLES))}）"
+                    )
+        return '; '.join(warnings) if warnings else None
+
+    def _retry_without_express_as_style(self, ssml: str, output_format: str, original_error: str) -> Tuple[bytes, int, Optional[str]]:
+        """
+        去掉 <mstts:express-as> 的 style 属性后重试。
+        Azure 可能因为 voice 不支持该 style 而返回 400。
+        """
+        # 去掉 express-as 的 style="xxx" 属性
+        retry_ssml = re.sub(r'style\s*=\s*"[^"]*"', '', ssml)
+        # 清理多余空格
+        retry_ssml = re.sub(r'<mstts:express-as(\s+)>', r'<mstts:express-as>', retry_ssml)
+        retry_ssml = re.sub(r'<mstts:express-as(\s+)(/?>)', r'<mstts:express-as\2', retry_ssml)
+
+        return self._synthesize_single(retry_ssml, output_format)
+
     def _normalize_namespaces(self, ssml: str) -> str:
         """
-        仅在需要时补充 xmlns:mstts 声明：
-        - 未使用 mstts: 前缀 → 不动
-        - 已声明 xmlns:mstts（无论写在哪个元素上）→ 尊重用户写法，不动
-        - 使用了 mstts: 但全文无 xmlns:mstts → 在 <speak> 上补一个
+        规范化 SSML 命名空间声明：
+        - 移除子元素上冗余的 xmlns:mstts（如 <mstts:express-as xmlns:mstts="...">）
+        - 确保 xmlns:mstts 只出现在 <speak> 根元素上
+        Azure 要求 mstts 命名空间在根元素声明，否则可能返回空 body 的 400。
         """
         if 'mstts:' not in ssml:
             return ssml
-        if 'xmlns:mstts' in ssml:
-            return ssml
+        # 移除所有 xmlns:mstts 声明（不管它在哪个元素上）
+        ssml = re.sub(r'\s+xmlns:mstts\s*=\s*"https://www\.w3\.org/2001/mstts"', '', ssml)
+        # 在 <speak> 根元素的 > 之前补回 xmlns:mstts
         speak_end = ssml.find('>')
         if speak_end == -1:
             return ssml
@@ -146,11 +175,12 @@ class AzureTTSClient:
         """
         Synthesize speech from SSML.
         若 SSML 文本内容过长，自动拆分为多个请求分段合成，再拼接音频。
+        若 express-as style 不被 voice 支持，自动去掉 style 后重试。
 
         Returns:
             Tuple of (audio_data, file_size, error_message)
         """
-        # 发送前预校验 prosody 属性值，提前拦截 dB 等非法后缀，
+        # 发送前预校验 prosody 属性值，提前拦截非法值，
         # 避免被 Azure 以空 body 的 400 拒绝（那种错误没有任何提示，极难定位）
         validate_error = self._validate_prosody_attributes(ssml)
         if validate_error:
@@ -167,7 +197,7 @@ class AzureTTSClient:
 
         # 文本未超过阈值，直接单次请求
         if text_length <= MAX_TEXT_CHARS_PER_REQUEST:
-            return self._synthesize_single(ssml, output_format)
+            return self._synthesize_with_retry(ssml, output_format)
 
         # 拆分 SSML 为多个 chunk
         chunks = self._split_ssml(ssml)
@@ -180,7 +210,7 @@ class AzureTTSClient:
         # 分段合成
         audio_segments = []
         for i, chunk_ssml in enumerate(chunks):
-            audio_data, file_size, error = self._synthesize_single(chunk_ssml, output_format)
+            audio_data, file_size, error = self._synthesize_with_retry(chunk_ssml, output_format)
             if error:
                 return None, 0, f"分段合成失败 ({i+1}/{len(chunks)}): {error}"
             try:
@@ -217,71 +247,85 @@ class AzureTTSClient:
     def _split_ssml(self, ssml: str) -> List[str]:
         """
         将过长的 SSML 拆分为多个 SSML 片段。
-        优先在 <p> 或 <s> 标签边界拆分，保留 voice / express-as 等外层包装。
+        使用正则提取，保留原始 XML 格式（避免 ET.tostring 改写命名空间/属性）。
         """
-        try:
-            root = ET.fromstring(ssml)
-        except ET.ParseError:
+        # 提取 <speak> 开头标签（含属性）
+        speak_open_match = re.match(r'(<speak\b[^>]*>)', ssml, re.DOTALL)
+        if not speak_open_match:
+            return [ssml]
+        speak_open = speak_open_match.group(1)
+
+        # 提取 </speak> 结尾标签
+        speak_close_match = re.search(r'(</speak>\s*)$', ssml, re.DOTALL)
+        speak_close = speak_close_match.group(1) if speak_close_match else '</speak>'
+
+        # 提取中间内容
+        inner = ssml[len(speak_open):ssml.rfind('</speak>')]
+
+        # 找到 <voice> 标签
+        voice_match = re.search(r'(<voice\b[^>]*>)(.*?)(</voice>)', inner, re.DOTALL)
+        if not voice_match:
             return [ssml]
 
-        # 提取 <speak> 属性
-        speak_attrs = dict(root.attrib)
-        speak_attrib_str = ' '.join(f'{k}="{v}"' for k, v in speak_attrs.items())
+        voice_open = voice_match.group(1)
+        voice_content = voice_match.group(2)
+        voice_close = voice_match.group(3)
 
-        # 找到 <voice> 元素
-        voice_elem = None
-        for child in root:
-            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-            if tag == 'voice':
-                voice_elem = child
-                break
-        if voice_elem is None:
-            return [ssml]
+        # 检查是否有 <mstts:express-as>
+        express_match = re.search(r'(<mstts:express-as\b[^>]*>)(.*?)(</mstts:express-as>)', voice_content, re.DOTALL)
+        if express_match:
+            express_open = express_match.group(1)
+            express_content = express_match.group(2)
+            express_close = express_match.group(3)
+        else:
+            express_open = ''
+            express_content = voice_content
+            express_close = ''
 
-        voice_attrib_str = ' '.join(f'{k}="{v}"' for k, v in voice_elem.attrib.items())
+        # 提取 content_parent 内的子元素（保留原始 XML 格式）
+        # 匹配所有标签对（含自闭合标签）
+        tag_pattern = re.compile(
+            r'<(?:[^>]+/>|(?:[^>]*>)(.*?)(?:</(?:[^>]+)>)',
+            re.DOTALL
+        )
+        # 更精确地提取：匹配开始标签到对应结束标签，或自闭合标签
+        element_pattern = re.compile(
+            r'<([a-zA-Z:][\w:.-]*)(\s[^>]*)?>.*?</\1>|<([a-zA-Z:][\w:.-]*)(\s[^>]*)?/>',
+            re.DOTALL
+        )
 
-        # 检查是否有 <mstts:express-as> 包装
-        express_as_elem = None
-        express_as_attrib_str = ''
-        for child in voice_elem:
-            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-            if tag == 'express-as':
-                express_as_elem = child
-                express_as_attrib_str = ' '.join(f'{k}="{v}"' for k, v in child.attrib.items())
-                break
-
-        # 收集可拆分的内容元素（<p> / <s> / <prosody> 等）
-        content_parent = express_as_elem or voice_elem
         content_items: List[str] = []
-        for child in content_parent:
-            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-            # 跳过纯格式标签（如 <break>），它们会跟随前面的文本
-            if tag == 'break':
-                if content_items:
-                    content_items[-1] += ET.tostring(child, encoding='unicode')
+        for m in element_pattern.finditer(express_content):
+            item = m.group(0)
+            # 跳过纯空白
+            if not item.strip():
                 continue
-            content_items.append(ET.tostring(child, encoding='unicode'))
+            # 跳过纯格式标签（如纯 <break>），它们跟随前面的文本
+            tag_name = m.group(1) or m.group(3)
+            if tag_name and tag_name.lower() == 'break':
+                if content_items:
+                    content_items[-1] = content_items[-1].rstrip() + '\n' + item
+                continue
+            content_items.append(item)
 
         if not content_items:
             return [ssml]
 
-        # 将内容项分组为不超过 MAX_TEXT_CHARS_PER_REQUEST 的 chunk
+        # 将内容项分组
         chunks_xml = self._group_items(content_items)
 
         # 为每个 chunk 重建完整 SSML
         result = []
         for chunk_xml in chunks_xml:
-            parts = [f'<speak {speak_attrib_str}>']
-            if not speak_attrs.get('xmlns:mstts'):
-                parts[0] = f'<speak {speak_attrib_str} xmlns:mstts="https://www.w3.org/2001/mstts">'
-            parts.append(f'<voice {voice_attrib_str}>')
-            if express_as_elem is not None:
-                parts.append(f'<mstts:express-as {express_as_attrib_str}>')
+            parts = [speak_open]
+            parts.append(voice_open)
+            if express_open:
+                parts.append(express_open)
             parts.append(chunk_xml)
-            if express_as_elem is not None:
-                parts.append('</mstts:express-as>')
-            parts.append('</voice>')
-            parts.append('</speak>')
+            if express_close:
+                parts.append(express_close)
+            parts.append(voice_close)
+            parts.append(speak_close)
             result.append(''.join(parts))
 
         return result if result else [ssml]
