@@ -1,0 +1,83 @@
+# SSML 语音合成平台 CI/CD - 构建 Docker 镜像并推送到 GHCR
+# 触发条件：push 到 main 分支 或 打 tag
+# 镜像地址：
+#   ghcr.io/aiastia/SSML/backend:main
+#   ghcr.io/aiastia/SSML/frontend:main
+# 拉取：
+#   docker pull ghcr.io/aiastia/SSML/backend:main
+#   docker pull ghcr.io/aiastia/SSML/frontend:main
+
+name: Build & Push Docker Images
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: aiastia
+  REPO: SSML
+
+jobs:
+  build-backend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/backend:main
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/backend:latest
+          # 缓存存到 GHCR（buildcache 类型），不占 Actions cache 10GB 配额
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/backend:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/backend:buildcache,mode=max
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/frontend:main
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/frontend:latest
+          # 缓存存到 GHCR（buildcache 类型），不占 Actions cache 10GB 配额
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/frontend:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.REPO }}/frontend:buildcache,mode=max
