@@ -285,30 +285,8 @@ class AzureTTSClient:
             express_close = ''
 
         # 提取 content_parent 内的子元素（保留原始 XML 格式）
-        # 匹配所有标签对（含自闭合标签）
-        tag_pattern = re.compile(
-            r'<(?:[^>]+/>|(?:[^>]*>)(.*?)(?:</(?:[^>]+)>)',
-            re.DOTALL
-        )
-        # 更精确地提取：匹配开始标签到对应结束标签，或自闭合标签
-        element_pattern = re.compile(
-            r'<([a-zA-Z:][\w:.-]*)(\s[^>]*)?>.*?</\1>|<([a-zA-Z:][\w:.-]*)(\s[^>]*)?/>',
-            re.DOTALL
-        )
-
-        content_items: List[str] = []
-        for m in element_pattern.finditer(express_content):
-            item = m.group(0)
-            # 跳过纯空白
-            if not item.strip():
-                continue
-            # 跳过纯格式标签（如纯 <break>），它们跟随前面的文本
-            tag_name = m.group(1) or m.group(3)
-            if tag_name and tag_name.lower() == 'break':
-                if content_items:
-                    content_items[-1] = content_items[-1].rstrip() + '\n' + item
-                continue
-            content_items.append(item)
+        # 用栈匹配方式逐个提取顶层子元素，正确处理嵌套标签
+        content_items = self._extract_top_level_elements(express_content)
 
         if not content_items:
             return [ssml]
@@ -331,6 +309,88 @@ class AzureTTSClient:
             result.append(''.join(parts))
 
         return result if result else [ssml]
+
+    def _extract_top_level_elements(self, content: str) -> List[str]:
+        """
+        从 XML 内容中提取顶层子元素（保留原始格式）。
+        用栈匹配方式处理嵌套标签，正确提取每个完整的顶层元素及其前后文本。
+        <break/> 等自闭合标签会合并到前一个元素。
+        """
+        items: List[str] = []
+        pos = 0
+        n = len(content)
+
+        while pos < n:
+            # 找到下一个标签开始
+            lt = content.find('<', pos)
+            if lt == -1:
+                # 剩余都是纯文本
+                tail = content[pos:]
+                if tail.strip() and items:
+                    items[-1] = items[-1].rstrip() + tail.rstrip()
+                break
+
+            # 标签前的文本
+            text_before = content[pos:lt]
+            if text_before.strip() and items:
+                items[-1] = items[-1].rstrip() + text_before
+            elif text_before.strip():
+                items.append(text_before)
+
+            # 解析标签名
+            gt = content.find('>', lt)
+            if gt == -1:
+                break
+            tag_text = content[lt:gt + 1]
+
+            # 判断是否是自闭合标签 <xxx .../>
+            if tag_text.endswith('/>'):
+                tag_name = re.match(r'<([a-zA-Z:][\w:.-]*)', tag_text)
+                name = tag_name.group(1).lower() if tag_name else ''
+                if name == 'break':
+                    if items:
+                        items[-1] = items[-1].rstrip() + '\n' + tag_text
+                    else:
+                        items.append(tag_text)
+                else:
+                    items.append(tag_text)
+                pos = gt + 1
+                continue
+
+            # 普通开标签 <xxx ...>
+            tag_name_m = re.match(r'<([a-zA-Z:][\w:.-]*)', tag_text)
+            if not tag_name_m:
+                pos = gt + 1
+                continue
+            tag_name = tag_name_m.group(1)
+            close_tag = f'</{tag_name}>'
+
+            # 用栈找到匹配的结束标签（处理同名嵌套）
+            depth = 1
+            search_pos = gt + 1
+            element_start = lt
+            while search_pos < n and depth > 0:
+                next_open = content.find(f'<{tag_name}', search_pos)
+                next_close = content.find(close_tag, search_pos)
+                if next_close == -1:
+                    # 没有结束标签，当作自闭合处理
+                    break
+                if next_open != -1 and next_open < next_close:
+                    # 检查 next_open 是开标签还是自闭合
+                    open_end = content.find('>', next_open)
+                    if open_end != -1 and not content[next_open:open_end + 1].endswith('/>'):
+                        depth += 1
+                    search_pos = open_end + 1
+                else:
+                    depth -= 1
+                    search_pos = next_close + len(close_tag)
+
+            element_end = search_pos
+            full_element = content[element_start:element_end]
+            items.append(full_element)
+            pos = element_end
+
+        return items
 
     def _group_items(self, items: List[str]) -> List[str]:
         """将 XML 片段分组，使每组纯文本长度不超过上限"""
