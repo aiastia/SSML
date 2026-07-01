@@ -92,8 +92,8 @@ class AzureTTSClient:
         }
         hints = {
             'volume': "volume 不支持 dB 后缀，请用 0-100 / 相对百分比(如 +30%) / 预设词",
-            'rate': "rate 请用相对百分比(如 +10%)或预设词(x-slow/slow/medium/fast/x-fast)",
-            'pitch': "pitch 请用相对赫兹(如 +5Hz)或预设词(x-low/low/medium/high/x-high)",
+            'rate': "rate 请用相对百分比(如 +10%/-4%/0%)或预设词(x-slow/slow/medium/fast/x-fast)",
+            'pitch': "pitch 请用相对百分比(如 +10%/-6%/0%)或相对赫兹(如 +5Hz)或预设词(x-low/low/medium/high/x-high)",
         }
 
         def _is_valid(attr: str, value: str) -> bool:
@@ -102,9 +102,11 @@ class AzureTTSClient:
                 return True
             if attr == 'volume' and re.fullmatch(r'\d{1,3}', value) and 0 <= int(value) <= 100:
                 return True
-            if attr in ('volume', 'rate') and re.fullmatch(r'[+-]\d+%$', value):
+            # volume / rate 支持 ±N% 相对百分比
+            if attr in ('volume', 'rate') and re.fullmatch(r'[+-]?\d+%$', value):
                 return True
-            if attr == 'pitch' and re.fullmatch(r'[+-]\d+Hz$', value):
+            # pitch 支持 ±N% 相对百分比 和 ±NHz 相对赫兹
+            if attr == 'pitch' and (re.fullmatch(r'[+-]?\d+%$', value) or re.fullmatch(r'[+-]?\d+Hz$', value)):
                 return True
             return False
 
