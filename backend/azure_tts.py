@@ -31,6 +31,14 @@ class AzureTTSClient:
             "Content-Type": "application/ssml+xml",
             "X-Microsoft-OutputFormat": output_format
         }
+        # 打印即将发送的 SSML（repr 形式，便于发现隐藏字符/多余空格）
+        print("=" * 100)
+        print(f"[Azure TTS] 请求 URL: {self.base_url}")
+        print(f"[Azure TTS] OutputFormat: {output_format}")
+        print("[Azure TTS] 即将发送的 SSML (repr):")
+        print(repr(ssml))
+        print("=" * 100)
+
         try:
             response = requests.post(
                 self.base_url,
@@ -42,6 +50,12 @@ class AzureTTSClient:
                 audio_data = response.content
                 return audio_data, len(audio_data), None
             else:
+                # 打印 Azure 的原始返回，便于定位 InvalidSsml 等具体原因
+                print("=" * 100)
+                print(f"[Azure TTS] HTTP {response.status_code} {response.reason}")
+                print("[Azure TTS] Azure 原始返回 (response.text):")
+                print(response.text)
+                print("=" * 100)
                 # 尝试解析 Azure 返回的错误信息
                 error_msg = self._parse_azure_error(response)
                 return None, 0, f"API Error: {response.status_code} - {error_msg}"
