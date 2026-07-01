@@ -13,22 +13,34 @@
     </div>
     
     <div class="editor-toolbar">
-      <button class="btn btn-secondary btn-sm" @click="insertTag('speak')" title="插入 speak 标签">
-        {{ tagLabels.speak }}
+      <button class="btn btn-secondary btn-sm" @click="insertTag('speak')" title="SSML 根元素，所有内容的入口">
+        旁白
       </button>
-      <button class="btn btn-secondary btn-sm" @click="insertTag('voice')" title="插入 voice 标签">
-        {{ tagLabels.voice }}
+      <button class="btn btn-secondary btn-sm" @click="insertTag('voice')" title="指定朗读的声音角色">
+        语音
       </button>
-      <button class="btn btn-secondary btn-sm" @click="insertTag('prosody')" title="插入 prosody 标签">
-        {{ tagLabels.prosody }}
+      <button class="btn btn-secondary btn-sm" @click="insertTag('express-as')" title="情感表达： cheerful、sad、angry、calm 等">
+        情感
       </button>
-      <button class="btn btn-secondary btn-sm" @click="insertTag('break')" title="插入 break 标签">
-        {{ tagLabels.break }}
+      <button class="btn btn-secondary btn-sm" @click="insertTag('prosody')" title="调节语速、音调、音量">
+        语调
       </button>
-      <button class="btn btn-secondary btn-sm" @click="insertTag('emphasis')" title="插入 emphasis 标签">
-        {{ tagLabels.emphasis }}
+      <button class="btn btn-secondary btn-sm" @click="insertTag('break')" title="在朗读中插入停顿">
+        停顿
       </button>
-      <button class="btn btn-secondary btn-sm" @click="formatXML" title="格式化 XML">
+      <button class="btn btn-secondary btn-sm" @click="insertTag('emphasis')" title="强调效果，让文字读得更重或更轻">
+        强调
+      </button>
+      <button class="btn btn-secondary btn-sm" @click="insertTag('say-as')" title="特殊发音：数字、日期、电话号码等">
+        发音
+      </button>
+      <button class="btn btn-secondary btn-sm" @click="insertTag('phoneme')" title="音标：指定汉字的拼音或英文音标读法">
+        音标
+      </button>
+      <button class="btn btn-secondary btn-sm" @click="insertTag('sub')" title="替换：屏幕上显示 A，实际读 B">
+        替换
+      </button>
+      <button class="btn btn-secondary btn-sm" @click="formatXML" title="格式化 XML 代码">
         格式化
       </button>
     </div>
@@ -181,7 +193,7 @@ const loadTemplate = () => {
   }
 }
 
-// 插入标签
+// 插入标签（附带中文注释）
 const insertTag = (tagName) => {
   const textarea = editor.value
   const start = textarea.selectionStart
@@ -191,20 +203,41 @@ const insertTag = (tagName) => {
   
   let tagPair = ''
   switch (tagName) {
+    // <!-- SSML 根元素：声明版本和语言，所有内容的入口 -->
     case 'speak':
       tagPair = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">\n    ${selectedText}\n</speak>`
       break
+    // <!-- 语音元素：指定朗读的声音角色 -->
     case 'voice':
       tagPair = `<voice name="zh-CN-XiaoxiaoNeural">${selectedText}</voice>`
       break
+    // <!-- 情感表达：style 可选 cheerful / sad / angry / calm / fearful / serious / serene / excited / general / narration 等 -->
+    case 'express-as':
+      tagPair = `<mstts:express-as style="cheerful">${selectedText}</mstts:express-as>`
+      break
+    // <!-- 语调控制：调节语速(rate)、音调(pitch)、音量(volume) -->
     case 'prosody':
       tagPair = `<prosody rate="medium" pitch="0%">${selectedText}</prosody>`
       break
+    // <!-- 停顿控制：在朗读中插入一段静默，time 指定时长 -->
     case 'break':
       tagPair = selectedText ? `<break time="${selectedText}" />` : `<break time="1s" />`
       break
+    // <!-- 强调效果：level="strong" 加强 / "reduction" 减弱 -->
     case 'emphasis':
       tagPair = `<emphasis level="strong">${selectedText}</emphasis>`
+      break
+    // <!-- 特殊发音：interpret-as 可选 characters / cardinal / fraction / ordinal / date / time / telephone 等 -->
+    case 'say-as':
+      tagPair = `<say-as interpret-as="characters">${selectedText}</say-as>`
+      break
+    // <!-- 音标：指定汉字的拼音读法，ph 填拼音 -->
+    case 'phoneme':
+      tagPair = `<phoneme alphabet="sapi" ph="zhī dào">${selectedText}</phoneme>`
+      break
+    // <!-- 替换：屏幕上显示 sub 的文本，实际朗读 alias 的文本 -->
+    case 'sub':
+      tagPair = `<sub alias="别的内容">${selectedText}</sub>`
       break
   }
   

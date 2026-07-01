@@ -52,12 +52,31 @@
               <div class="form-group">
                 <label for="voice">默认语音</label>
                 <select id="voice" v-model="config.voice">
-                  <option value="zh-CN-XiaoxiaoNeural">中文 - 晓晓</option>
-                  <option value="zh-CN-YunxiNeural">中文 - 云希</option>
-                  <option value="zh-CN-YunyangNeural">中文 - 云扬</option>
-                  <option value="en-US-JennyNeural">English - Jenny</option>
-                  <option value="en-US-GuyNeural">English - Guy</option>
-                  <option value="ja-JP-NanamiNeural">日本語 - 七海</option>
+                  <optgroup label="🇨🇳 中文">
+                    <option value="zh-CN-XiaoxiaoNeural">晓晓 - 女声（温柔亲切）</option>
+                    <option value="zh-CN-YunxiNeural">云希 - 男声（沉稳叙述）</option>
+                    <option value="zh-CN-YunyangNeural">云扬 - 男声（新闻播报）</option>
+                    <option value="zh-CN-XiaoyiNeural">晓伊 - 女声（活泼可爱）</option>
+                    <option value="zh-CN-YunjianNeural">云健 - 男声（浑厚有力）</option>
+                  </optgroup>
+                  <optgroup label="🇺🇸 English">
+                    <option value="en-US-JennyNeural">Jenny - Female</option>
+                    <option value="en-US-GuyNeural">Guy - Male</option>
+                    <option value="en-US-AriaNeural">Aria - Female</option>
+                    <option value="en-US-DavisNeural">Davis - Male</option>
+                  </optgroup>
+                  <optgroup label="🇯🇵 日本語">
+                    <option value="ja-JP-NanamiNeural">七海 - 女声</option>
+                    <option value="ja-JP-KeitaNeural">圭太 - 男声</option>
+                  </optgroup>
+                  <optgroup label="🇰🇷 한국어">
+                    <option value="ko-KR-SunHiNeural">선히 - 女声</option>
+                    <option value="ko-KR-InJoonNeural">인준 - 男声</option>
+                  </optgroup>
+                  <optgroup label="🇫🇷 Français">
+                    <option value="fr-FR-DeniseNeural">Denise - Female</option>
+                    <option value="fr-FR-HenriNeural">Henri - Male</option>
+                  </optgroup>
                 </select>
               </div>
             </div>
