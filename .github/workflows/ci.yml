@@ -1,11 +1,11 @@
 # SSML 语音合成平台 CI/CD - 构建 Docker 镜像并推送到 GHCR
 # 触发条件：push 到 main 分支 或 打 tag
 # 镜像地址：
-#   ghcr.io/aiastia/SSML/backend:main
-#   ghcr.io/aiastia/SSML/frontend:main
+#   ghcr.io/aiastia/ssml/backend:main
+#   ghcr.io/aiastia/ssml/frontend:main
 # 拉取：
-#   docker pull ghcr.io/aiastia/SSML/backend:main
-#   docker pull ghcr.io/aiastia/SSML/frontend:main
+#   docker pull ghcr.io/aiastia/ssml/backend:main
+#   docker pull ghcr.io/aiastia/ssml/frontend:main
 
 name: Build & Push Docker Images
 
@@ -18,7 +18,7 @@ on:
 env:
   REGISTRY: ghcr.io
   OWNER: aiastia
-  REPO: SSML
+  REPO: ssml
 
 jobs:
   build-backend:
