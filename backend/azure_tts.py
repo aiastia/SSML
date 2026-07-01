@@ -7,10 +7,10 @@ from pydub import AudioSegment
 from models import VoiceInfo
 
 
-# Azure TTS 单次请求的文本字符数上限。
-# Azure 官方文档限制是按音频时长（约 10 分钟），实际字符上限很高（万级）。
-# 拆分会引入额外复杂度和潜在错误，因此只在文本非常大时才拆分。
-MAX_TEXT_CHARS_PER_REQUEST = 10000
+# Azure TTS 单次请求的纯文本字符数上限。
+# Azure 实际限制取决于多种因素，经验值是单次请求纯文本不超过 ~800 字符最稳定。
+# 超过此值自动拆分为多个 chunk，分别请求后拼接音频。
+MAX_TEXT_CHARS_PER_REQUEST = 800
 
 
 class AzureTTSClient:
@@ -191,6 +191,54 @@ class AzureTTSClient:
             return ssml
         return ssml[:speak_end] + ' xmlns:mstts="https://www.w3.org/2001/mstts"' + ssml[speak_end:]
 
+    def _cleanup_ssml(self, ssml: str) -> str:
+        """
+        清理 SSML，避免 Azure 拒绝：
+        1. 合并连续的 <break> 标签（取最长停顿时间）
+        2. 去掉空标签之间的多余空白文本节点
+        """
+        # 合并连续 break：找出所有连续的 <break .../> 序列，保留 time 最长的一个
+        def _merge_breaks(match):
+            breaks = match.group(0)
+            # 提取所有 time 值
+            times = re.findall(r'time\s*=\s*"(\d+)(ms|s)"', breaks)
+            if not times:
+                return breaks  # 没有时间，保留第一个
+            # 取最大值
+            max_ms = 0
+            for val, unit in times:
+                ms = int(val) * (1000 if unit == 's' else 1)
+                if ms > max_ms:
+                    max_ms = ms
+            return f'<break time="{max_ms}ms"/>'
+
+        ssml = re.sub(
+            r'(<break\b[^>]*/>\s*)+',
+            _merge_breaks,
+            ssml
+        )
+        return ssml
+
+    def _cleanup_chunk_edges(self, ssml: str) -> str:
+        """
+        清理拆分后的 chunk 边缘：
+        - 去掉 express-as / voice 内部开头和结尾的连续 <break> 标签
+        - Azure 不接受以 break 开头或结尾的内容块
+        """
+        # 去掉标签内部开头的 break（如 <mstts:express-as ...>\n<break .../>）
+        ssml = re.sub(
+            r'((?:express-as|voice|prosody)\b[^>]*>)\s*(?:<break\b[^>]*/>\s*)+',
+            r'\1',
+            ssml
+        )
+        # 去掉标签内部结尾的 break（如 <break .../>\n</mstts:express-as>）
+        ssml = re.sub(
+            r'(?:<break\b[^>]*/>\s*)*(</(?:mstts:express-as|voice|prosody)>)',
+            r'\1',
+            ssml
+        )
+        return ssml
+
     def synthesize(self, ssml: str, output_format: str = "audio-16khz-32kbitrate-mono-mp3") -> Tuple[bytes, int, Optional[str]]:
         """
         Synthesize speech from SSML.
@@ -209,6 +257,10 @@ class AzureTTSClient:
         # 规范化命名空间声明，确保 xmlns:mstts 在 <speak> 根元素上
         ssml = self._normalize_namespaces(ssml)
 
+        # 清理 SSML：合并连续的 <break> 标签（取最长停顿时间），
+        # 去掉 chunk 开头/结尾的多余 break，避免 Azure 400
+        ssml = self._cleanup_ssml(ssml)
+
         # 提取纯文本长度
         try:
             text_length = self._get_text_length(ssml)
@@ -225,7 +277,10 @@ class AzureTTSClient:
             chunks = [ssml]
 
         if len(chunks) == 1:
-            return self._synthesize_single(chunks[0], output_format)
+            return self._synthesize_with_retry(chunks[0], output_format)
+
+        # 对每个 chunk 再做一次清理（移除开头/结尾的连续 break、空白）
+        chunks = [self._cleanup_chunk_edges(c) for c in chunks]
 
         # 分段合成
         audio_segments = []
