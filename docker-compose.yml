@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   backend:
-    image: ghcr.io/aiastia/SSML/backend:main
+    image: ghcr.io/aiastia/ssml/backend:main
     container_name: ssml-tts-backend
     ports:
       - "8000:8000"
@@ -13,7 +13,7 @@ services:
       - ssml-tts-network
 
   frontend:
-    image: ghcr.io/aiastia/SSML/frontend:main
+    image: ghcr.io/aiastia/ssml/frontend:main
     container_name: ssml-tts-frontend
     ports:
       - "8080:80"
