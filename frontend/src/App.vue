@@ -68,6 +68,10 @@
           <div class="card">
             <div class="card-header">
               <h2 class="card-title">SSML 编辑</h2>
+              <span class="char-count" :class="{ warning: isTextLong }">
+                {{ charCount }} 字符
+                <span v-if="isTextLong" class="char-warning">（长文本将自动分段合成）</span>
+              </span>
             </div>
             <SSMLEditor
               v-model="ssmlContent"
@@ -150,6 +154,16 @@ const validationResult = ref(null)
 // 计算属性
 const isConfigValid = computed(() => {
   return config.value.apiKey.trim() !== '' && ssmlContent.value.trim() !== ''
+})
+
+const charCount = computed(() => {
+  return ssmlContent.value.length
+})
+
+const isTextLong = computed(() => {
+  // 纯文本大致长度（去除 XML 标签）
+  const textOnly = ssmlContent.value.replace(/<[^>]+>/g, '')
+  return textOnly.length > 3000
 })
 
 // 方法
@@ -264,6 +278,25 @@ watch(config, (newConfig) => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 20px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.char-count {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.char-count.warning {
+  color: #d97706;
+}
+
+.char-warning {
+  font-size: 12px;
 }
 
 .config-form {
