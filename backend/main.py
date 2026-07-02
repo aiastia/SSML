@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from typing import Dict
 import os
@@ -173,17 +173,62 @@ async def validate_ssml(request: ValidateRequest):
 
 
 @app.get("/api/audio/{filename}")
-async def get_audio(filename: str):
-    """Get audio file"""
+async def get_audio(filename: str, request: Request):
+    """Get audio file (支持 HTTP Range,浏览器可拖动进度条 seek)"""
     filepath = os.path.join(AUDIO_DIR, filename)
-    
+
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Audio file not found")
-    
-    return FileResponse(
-        filepath,
+
+    file_size = os.path.getsize(filepath)
+    range_header = request.headers.get("range")
+
+    # 无 Range 请求 → 返回完整文件,声明支持 Range
+    if not range_header:
+        return FileResponse(
+            filepath,
+            media_type="audio/mpeg",
+            headers={"Accept-Ranges": "bytes"},
+        )
+
+    # 解析 Range: bytes=start-end
+    try:
+        range_spec = range_header.strip().lower()
+        assert range_spec.startswith("bytes=")
+        start_str, _, end_str = range_spec[6:].partition("-")
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else file_size - 1
+    except Exception:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+
+    start = max(0, start)
+    end = min(end, file_size - 1)
+    if start > end:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+
+    content_length = end - start + 1
+
+    def iter_file():
+        with open(filepath, "rb") as f:
+            f.seek(start)
+            remaining = content_length
+            while remaining > 0:
+                chunk = f.read(min(65536, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        status_code=206,
         media_type="audio/mpeg",
-        filename=filename
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(content_length),
+            "Cache-Control": "no-cache",
+        },
     )
 
 

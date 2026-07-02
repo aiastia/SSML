@@ -15,16 +15,17 @@
         @ended="handleEnded"
       ></audio>
       
-      <div class="waveform">
+      <div class="waveform" ref="waveformRef" @click="handleWaveformSeek" @mousedown="startDragSeek">
         <div class="waveform-bars">
-          <div 
-            v-for="(bar, index) in waveformBars" 
+          <div
+            v-for="(bar, index) in waveformBars"
             :key="index"
             class="waveform-bar"
-            :class="{ active: isPlaying && index < progressPercent * 100 }"
+            :class="{ active: index < progressPercent * 100 }"
             :style="{ height: bar.height }"
           ></div>
         </div>
+        <div class="waveform-progress" :style="{ width: progressPercent * 100 + '%' }"></div>
       </div>
       
       <div class="controls">
@@ -104,12 +105,14 @@ const props = defineProps({
 })
 
 const audioPlayer = ref(null)
+const waveformRef = ref(null)
 const isPlaying = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
 const volume = ref(1)
 const playbackRate = ref(1)
 const loading = ref(false)
+const isDragging = ref(false)
 
 // 生成波形数据
 const waveformBars = ref([])
@@ -149,6 +152,34 @@ const handleSeek = (e) => {
   const seekTime = parseFloat(e.target.value)
   audioPlayer.value.currentTime = seekTime
   currentTime.value = seekTime
+}
+
+// ── 波形图点击/拖拽跳转 ──
+const seekToPosition = (clientX) => {
+  if (!waveformRef.value || !audioPlayer.value || !duration.value) return
+  const rect = waveformRef.value.getBoundingClientRect()
+  const percent = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+  const seekTime = percent * duration.value
+  audioPlayer.value.currentTime = seekTime
+  currentTime.value = seekTime
+}
+
+const handleWaveformSeek = (e) => {
+  if (isDragging.value) return // 拖拽中不重复处理点击
+  seekToPosition(e.clientX)
+}
+
+const startDragSeek = (e) => {
+  isDragging.value = true
+  seekToPosition(e.clientX)
+  const onMove = (ev) => seekToPosition(ev.clientX)
+  const onUp = () => {
+    isDragging.value = false
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
 }
 
 const handleVolumeChange = () => {
@@ -243,6 +274,9 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  user-select: none;
 }
 
 .waveform-bars {
@@ -263,6 +297,17 @@ onUnmounted(() => {
 
 .waveform-bar.active {
   background-color: var(--accent-color);
+}
+
+.waveform-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background-color: var(--accent-color);
+  opacity: 0.15;
+  pointer-events: none;
+  border-radius: 6px 0 0 6px;
 }
 
 .controls {
